@@ -15,7 +15,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL = "@eclipsedlf"
 CHANNEL_URL = "https://t.me/eclipsedlf"
 
-# Куда приходят заявки
+# Администратор, которому приходят заявки
 WITHDRAW_ADMIN = "@Eclipsed_consult"
 
 REFERRAL_REWARD = 0.50
@@ -46,8 +46,9 @@ CREATE TABLE IF NOT EXISTS users (
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS promo_uses (
-    user_id INTEGER PRIMARY KEY,
-    promo TEXT NOT NULL
+    user_id INTEGER,
+    promo TEXT NOT NULL,
+    PRIMARY KEY (user_id, promo)
 )
 """)
 
@@ -182,7 +183,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
     # =========================
     # REFERRAL
     # =========================
@@ -251,7 +251,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (ValueError, TypeError):
             pass
 
-
     cursor.execute(
         """
         UPDATE users
@@ -262,7 +261,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     db.commit()
-
 
     await update.message.reply_text(
         "✅ Подписка подтверждена!\n\n"
@@ -289,7 +287,6 @@ async def handle_message(
         user.username or ""
     )
 
-
     # Проверяем подписку
     if not await is_subscribed(
         context,
@@ -303,15 +300,28 @@ async def handle_message(
 
         return
 
-
     # =========================
     # WITHDRAW INPUT
     # =========================
 
     if context.user_data.get("waiting_withdraw"):
 
+        # Отмена
+        if text.lower() in ("отмена", "cancel", "❌ отмена"):
+
+            context.user_data["waiting_withdraw"] = False
+
+            await update.message.reply_text(
+                "❌ Вывод отменён.",
+                reply_markup=keyboard()
+            )
+
+            return
+
         try:
-            amount = float(text.replace(",", "."))
+            amount = float(
+                text.replace(",", ".")
+            )
 
         except ValueError:
 
@@ -323,17 +333,7 @@ async def handle_message(
 
             return
 
-
-        if amount < MIN_WITHDRAW:
-
-            await update.message.reply_text(
-                "❌ Минимальная сумма вывода — 15 ⭐.",
-                reply_markup=keyboard()
-            )
-
-            return
-
-
+        # Проверяем положительное число
         if amount <= 0:
 
             await update.message.reply_text(
@@ -343,7 +343,17 @@ async def handle_message(
 
             return
 
+        # Проверяем минимум
+        if amount < MIN_WITHDRAW:
 
+            await update.message.reply_text(
+                "❌ Минимальная сумма вывода — 15 ⭐.",
+                reply_markup=keyboard()
+            )
+
+            return
+
+        # Получаем баланс
         cursor.execute(
             """
             SELECT balance
@@ -355,9 +365,9 @@ async def handle_message(
 
         row = cursor.fetchone()
 
-        balance = row[0] if row else 0
+        balance = row[0] if row else 0.0
 
-
+        # Проверяем баланс
         if amount > balance:
 
             await update.message.reply_text(
@@ -368,38 +378,56 @@ async def handle_message(
 
             return
 
+        # =========================
+        # СОЗДАЁМ ЗАЯВКУ
+        # =========================
 
-        # Списываем сумму
-        cursor.execute(
-            """
-            UPDATE users
-            SET balance = balance - ?
-            WHERE user_id = ?
-            """,
-            (amount, user.id)
-        )
+        try:
 
-
-        # Создаём заявку
-        cursor.execute(
-            """
-            INSERT INTO withdrawals
-            (user_id, username, amount, status)
-            VALUES (?, ?, ?, 'pending')
-            """,
-            (
-                user.id,
-                user.username or "",
-                amount
+            # Списываем Stars
+            cursor.execute(
+                """
+                UPDATE users
+                SET balance = balance - ?
+                WHERE user_id = ?
+                """,
+                (
+                    amount,
+                    user.id
+                )
             )
-        )
 
-        withdrawal_id = cursor.lastrowid
+            # Создаём заявку
+            cursor.execute(
+                """
+                INSERT INTO withdrawals
+                (user_id, username, amount, status)
+                VALUES (?, ?, ?, 'pending')
+                """,
+                (
+                    user.id,
+                    user.username or "",
+                    amount
+                )
+            )
 
-        db.commit()
+            withdrawal_id = cursor.lastrowid
+
+            db.commit()
+
+        except Exception:
+
+            db.rollback()
+
+            await update.message.reply_text(
+                "❌ Ошибка при создании заявки. "
+                "Попробуй ещё раз.",
+                reply_markup=keyboard()
+            )
+
+            return
 
         context.user_data["waiting_withdraw"] = False
-
 
         username = (
             f"@{user.username}"
@@ -407,8 +435,10 @@ async def handle_message(
             else "нет username"
         )
 
+        # =========================
+        # ОТПРАВКА АДМИНУ
+        # =========================
 
-        # Отправляем заявку админу
         try:
 
             await context.bot.send_message(
@@ -425,15 +455,19 @@ async def handle_message(
 
         except Exception:
 
-            # Если сообщение админу не отправилось,
-            # возвращаем баланс пользователю
+            # Если админу не удалось отправить заявку,
+            # возвращаем Stars пользователю
+
             cursor.execute(
                 """
                 UPDATE users
                 SET balance = balance + ?
                 WHERE user_id = ?
                 """,
-                (amount, user.id)
+                (
+                    amount,
+                    user.id
+                )
             )
 
             cursor.execute(
@@ -447,13 +481,12 @@ async def handle_message(
             db.commit()
 
             await update.message.reply_text(
-                "❌ Не удалось отправить заявку. "
-                "Попробуй позже.",
+                "❌ Не удалось отправить заявку админу.\n\n"
+                "⭐ Stars возвращены на баланс.",
                 reply_markup=keyboard()
             )
 
             return
-
 
         await update.message.reply_text(
             "✅ Заявка на вывод создана!\n\n"
@@ -465,273 +498,5 @@ async def handle_message(
 
         return
 
-
     # =========================
     # BALANCE
-    # =========================
-
-    if text == "💰 Баланс":
-
-        cursor.execute(
-            """
-            SELECT balance, referrals
-            FROM users
-            WHERE user_id = ?
-            """,
-            (user.id,)
-        )
-
-        data = cursor.fetchone()
-
-        balance = data[0] if data else 0
-        referrals = data[1] if data else 0
-
-        await update.message.reply_text(
-            f"💰 Баланс: {balance:.2f} ⭐\n"
-            f"👥 Рефералов: {referrals}",
-            reply_markup=keyboard()
-        )
-
-        return
-
-
-    # =========================
-    # REFERRALS
-    # =========================
-
-    if text == "👥 Рефералы":
-
-        bot = await context.bot.get_me()
-
-        referral_link = (
-            f"https://t.me/"
-            f"{bot.username}"
-            f"?start={user.id}"
-        )
-
-        await update.message.reply_text(
-            "👥 Твоя реферальная ссылка:\n\n"
-            f"{referral_link}\n\n"
-            "⭐ За одного приглашённого: "
-            "0.50 Stars",
-            reply_markup=keyboard()
-        )
-
-        return
-
-
-    # =========================
-    # PROMO BUTTON
-    # =========================
-
-    if text == "🎁 Промокод":
-
-        await update.message.reply_text(
-            "🎁 Введите промокод",
-            reply_markup=keyboard()
-        )
-
-        return
-
-
-    # =========================
-    # PROMO ACTIVATION
-    # =========================
-
-    if text == PROMO:
-
-        cursor.execute(
-            """
-            SELECT user_id
-            FROM promo_uses
-            WHERE user_id = ?
-            """,
-            (user.id,)
-        )
-
-        already_used = cursor.fetchone()
-
-        if already_used:
-
-            await update.message.reply_text(
-                "❌ Вы уже использовали этот промокод.",
-                reply_markup=keyboard()
-            )
-
-            return
-
-
-        cursor.execute(
-            """
-            SELECT reward, max_uses, uses
-            FROM promos
-            WHERE promo = ?
-            """,
-            (PROMO,)
-        )
-
-        promo_data = cursor.fetchone()
-
-        if not promo_data:
-
-            await update.message.reply_text(
-                "❌ Промокод недоступен.",
-                reply_markup=keyboard()
-            )
-
-            return
-
-
-        reward, max_uses, uses = promo_data
-
-
-        if uses >= max_uses:
-
-            await update.message.reply_text(
-                "❌ Все активации промокода закончились.",
-                reply_markup=keyboard()
-            )
-
-            return
-
-
-        cursor.execute(
-            """
-            UPDATE users
-            SET balance = balance + ?
-            WHERE user_id = ?
-            """,
-            (reward, user.id)
-        )
-
-
-        cursor.execute(
-            """
-            INSERT INTO promo_uses
-            (user_id, promo)
-            VALUES (?, ?)
-            """,
-            (user.id, PROMO)
-        )
-
-
-        cursor.execute(
-            """
-            UPDATE promos
-            SET uses = uses + 1
-            WHERE promo = ?
-            """,
-            (PROMO,)
-        )
-
-        db.commit()
-
-
-        await update.message.reply_text(
-            "🎉 Промокод активирован!\n\n"
-            "⭐ Получено: 10 Stars",
-            reply_markup=keyboard()
-        )
-
-        return
-
-
-    # =========================
-    # WITHDRAW BUTTON
-    # =========================
-
-    if text == "💸 Вывод":
-
-        cursor.execute(
-            """
-            SELECT balance
-            FROM users
-            WHERE user_id = ?
-            """,
-            (user.id,)
-        )
-
-        data = cursor.fetchone()
-
-        balance = data[0] if data else 0
-
-
-        if balance < MIN_WITHDRAW:
-
-            await update.message.reply_text(
-                "💸 Минимальный вывод: 15 ⭐\n\n"
-                f"💰 Твой баланс: {balance:.2f} ⭐",
-                reply_markup=keyboard()
-            )
-
-            return
-
-
-        context.user_data["waiting_withdraw"] = True
-
-        await update.message.reply_text(
-            "💸 ВЫВОД STARS\n\n"
-            f"💰 Твой баланс: {balance:.2f} ⭐\n"
-            "⭐ Минимум: 15 ⭐\n\n"
-            "✏️ Введи количество Stars, "
-            "которое хочешь вывести:",
-            reply_markup=keyboard()
-        )
-
-        return
-
-
-    # =========================
-    # CHANNEL
-    # =========================
-
-    if text == "📢 Канал":
-
-        await update.message.reply_text(
-            "📢 Наш Telegram-канал:\n"
-            f"{CHANNEL_URL}",
-            reply_markup=keyboard()
-        )
-
-        return
-
-
-# =========================
-# RUN
-# =========================
-
-def main():
-
-    if not BOT_TOKEN:
-        raise RuntimeError(
-            "BOT_TOKEN не найден в GitHub Secrets"
-        )
-
-    app = (
-        Application
-        .builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
-
-    app.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
-    )
-
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_message
-        )
-    )
-
-    print("Bot started!")
-
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
