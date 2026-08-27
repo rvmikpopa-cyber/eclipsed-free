@@ -18,8 +18,9 @@ CHANNEL_URL = "https://t.me/eclipsedlf"
 REFERRAL_REWARD = 0.50
 MIN_WITHDRAW = 15.0
 
+# Секретный промокод
 PROMO = "15kleeps"
-PROMO_REWARD = 15.0
+PROMO_REWARD = 10.0
 PROMO_LIMIT = 10
 
 
@@ -102,7 +103,6 @@ def get_user(user_id, username=""):
             """,
             (user_id, username)
         )
-
         db.commit()
 
     return user
@@ -113,7 +113,6 @@ def get_user(user_id, username=""):
 # =========================
 
 async def is_subscribed(context, user_id):
-
     try:
         member = await context.bot.get_chat_member(
             CHANNEL,
@@ -153,14 +152,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             "👋 Привет!\n\n"
-            "Для использования бота подпишись на канал:\n\n"
-            "@eclipsedlf\n\n"
+            "Для использования бота подпишись "
+            "на канал @eclipsedlf.\n\n"
             "После подписки снова нажми /start.",
             reply_markup=keyboard()
         )
 
         return
-
 
     # =========================
     # REFERRAL PROTECTION
@@ -169,18 +167,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
 
         try:
-
-            inviter_id = int(
-                context.args[0]
-            )
+            inviter_id = int(context.args[0])
 
             # Нельзя пригласить самого себя
-            if inviter_id == user.id:
-                inviter_id = None
+            if inviter_id != user.id:
 
-            if inviter_id:
-
-                # Проверяем пригласившего
+                # Проверяем, существует ли пригласивший
                 cursor.execute(
                     """
                     SELECT user_id
@@ -194,7 +186,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 if inviter_exists:
 
-                    # Проверяем, есть ли уже пригласивший
+                    # Проверяем, был ли пользователь
+                    # уже привязан к другому пригласившему
                     cursor.execute(
                         """
                         SELECT invited_by
@@ -208,7 +201,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     if row and row[0] is None:
 
-                        # Привязываем пользователя
                         cursor.execute(
                             """
                             UPDATE users
@@ -222,7 +214,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             )
                         )
 
-                        # Начисляем награду
+                        # Начисляем только один раз
                         cursor.execute(
                             """
                             UPDATE users
@@ -241,7 +233,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (ValueError, TypeError):
             pass
 
-
     cursor.execute(
         """
         UPDATE users
@@ -253,11 +244,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     db.commit()
 
-
     await update.message.reply_text(
         "✅ Подписка подтверждена!\n\n"
         "⭐ Приглашай пользователей и получай "
-        f"{REFERRAL_REWARD:.2f} Stars за каждого.",
+        "0.50 Stars за каждого.",
         reply_markup=keyboard()
     )
 
@@ -278,7 +268,6 @@ async def handle_message(
         user.id,
         user.username or ""
     )
-
 
     # Проверка подписки
     if not await is_subscribed(
@@ -340,7 +329,8 @@ async def handle_message(
         await update.message.reply_text(
             "👥 Твоя реферальная ссылка:\n\n"
             f"{referral_link}\n\n"
-            f"⭐ Награда: {REFERRAL_REWARD:.2f} Stars",
+            "⭐ За одного приглашённого: "
+            "0.50 Stars",
             reply_markup=keyboard()
         )
 
@@ -348,23 +338,26 @@ async def handle_message(
 
 
     # =========================
-    # PROMO
+    # PROMO BUTTON
     # =========================
 
     if text == "🎁 Промокод":
 
         await update.message.reply_text(
-            "🎁 Введи промокод сообщением ниже.\n\n"
-            "Например: 15kleeps",
+            "🎁 Введи промокод сообщением.",
             reply_markup=keyboard()
         )
 
         return
 
 
-    # Активация промокода
+    # =========================
+    # SECRET PROMO
+    # =========================
+
     if text.lower() == PROMO.lower():
 
+        # Проверяем, использовал ли пользователь
         cursor.execute(
             """
             SELECT user_id
@@ -374,9 +367,7 @@ async def handle_message(
             (user.id,)
         )
 
-        already_used = cursor.fetchone()
-
-        if already_used:
+        if cursor.fetchone():
 
             await update.message.reply_text(
                 "❌ Ты уже использовал этот промокод.",
@@ -386,6 +377,7 @@ async def handle_message(
             return
 
 
+        # Получаем данные промокода
         cursor.execute(
             """
             SELECT reward, max_uses, uses
@@ -400,7 +392,7 @@ async def handle_message(
         if not promo_data:
 
             await update.message.reply_text(
-                "❌ Промокод не найден.",
+                "❌ Промокод недоступен.",
                 reply_markup=keyboard()
             )
 
@@ -410,17 +402,18 @@ async def handle_message(
         reward, max_uses, uses = promo_data
 
 
+        # Проверяем лимит
         if uses >= max_uses:
 
             await update.message.reply_text(
-                "❌ Все активации промокода закончились.",
+                "❌ Промокод больше недоступен.",
                 reply_markup=keyboard()
             )
 
             return
 
 
-        # Начисляем
+        # Начисляем 10 Stars
         cursor.execute(
             """
             UPDATE users
@@ -434,7 +427,7 @@ async def handle_message(
         )
 
 
-        # Записываем использование
+        # Записываем активацию
         cursor.execute(
             """
             INSERT INTO promo_uses
@@ -461,13 +454,11 @@ async def handle_message(
         db.commit()
 
 
-        remaining = max_uses - uses - 1
-
-
+        # Не показываем название промокода
+        # и количество оставшихся активаций
         await update.message.reply_text(
             "🎉 Промокод активирован!\n\n"
-            f"⭐ Получено: {reward:.0f} Stars\n"
-            f"🔥 Осталось активаций: {remaining}",
+            "⭐ Получено: 10 Stars",
             reply_markup=keyboard()
         )
 
@@ -497,8 +488,8 @@ async def handle_message(
         if balance < MIN_WITHDRAW:
 
             await update.message.reply_text(
-                f"💸 Минимальный вывод: "
-                f"{MIN_WITHDRAW:.0f} ⭐\n\n"
+                "💸 Минимальный вывод: "
+                "15 ⭐\n\n"
                 f"💰 Твой баланс: "
                 f"{balance:.2f} ⭐",
                 reply_markup=keyboard()
@@ -509,8 +500,8 @@ async def handle_message(
             await update.message.reply_text(
                 "💸 У тебя достаточно Stars "
                 "для оформления вывода.\n\n"
-                "⚙️ Система заявок будет "
-                "подключена следующим этапом.",
+                "⚙️ Система заявок на вывод "
+                "будет подключена следующим этапом.",
                 reply_markup=keyboard()
             )
 
@@ -524,7 +515,7 @@ async def handle_message(
     if text == "📢 Канал":
 
         await update.message.reply_text(
-            f"📢 Наш Telegram-канал:\n"
+            "📢 Наш Telegram-канал:\n"
             f"{CHANNEL_URL}",
             reply_markup=keyboard()
         )
@@ -539,11 +530,9 @@ async def handle_message(
 def main():
 
     if not BOT_TOKEN:
-
         raise RuntimeError(
             "BOT_TOKEN не найден в GitHub Secrets"
         )
-
 
     app = (
         Application
@@ -552,7 +541,6 @@ def main():
         .build()
     )
 
-
     app.add_handler(
         CommandHandler(
             "start",
@@ -560,14 +548,12 @@ def main():
         )
     )
 
-
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
         )
     )
-
 
     print("Bot started!")
 
